@@ -1,0 +1,27 @@
+{
+  "name": "recoverpay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "homepage": "https://USERNAME.github.io/REPOSITORY",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && gh-pages -d dist"
+  },
+  "dependencies": {
+    "firebase": "^11.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "gh-pages": "^6.3.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.5"
+  }
+}

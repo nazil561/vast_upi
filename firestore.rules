@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ==================== USERS ====================
+    // Users can read their own profile, but cannot directly modify it
+    // Profile is created/updated only via Cloud Functions
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if false; // Only via Cloud Functions
+    }
+    
+    // ==================== WALLETS ====================
+    // Wallets are read-only for clients
+    // All balance modifications must go through Cloud Functions
+    match /wallets/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if false; // Only via Cloud Functions
+    }
+    
+    // ==================== SECURITY POLICIES ====================
+    // Users can read and update their own security policies
+    match /securityPolicies/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+    }
+    
+    // ==================== PAYMENTS ====================
+    // Payments can be read by sender or recipient
+    // Creation is allowed for authenticated users
+    // Status updates and balance changes must go through Cloud Functions
+    match /payments/{paymentId} {
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.senderId || 
+         request.auth.uid == resource.data.recipientId ||
+         request.auth.uid == request.resource.data.senderId ||
+         request.auth.uid == request.resource.data.recipientId);
+      
+      allow create: if request.auth != null && 
+        request.auth.uid == request.resource.data.senderId;
+      
+      // Clients cannot directly update payment status - must use Cloud Functions
+      allow update: if false;
+      
+      allow delete: if false;
+    }
+    
+    // Payment events are append-only
+    match /payments/{paymentId}/events/{eventId} {
+      allow read: if request.auth != null;
+      allow create: if false; // Only via Cloud Functions
+      allow update, delete: if false;
+    }
+    
+    // ==================== HELPER FUNCTIONS ====================
+    // Function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Function to check if user owns the resource
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+  }
+}
