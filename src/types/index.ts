@@ -34,9 +34,24 @@ export type PaymentEventType =
 // Account connection states
 export type AccountConnectionState = 
   | 'NOT_CONNECTED'
+  | 'APPLICATION_STARTED'
+  | 'KYC_REQUIRED'
+  | 'KYC_PENDING'
+  | 'KYC_VERIFIED'
+  | 'ACCOUNT_CREATED'
   | 'CONNECTING'
   | 'CONNECTED'
   | 'DISCONNECTED';
+
+export type KycStatus =
+  | 'NOT_STARTED'
+  | 'IN_PROGRESS'
+  | 'DOCUMENT_SELECTED'
+  | 'DOCUMENT_SUBMITTED'
+  | 'VERIFICATION_PENDING'
+  | 'VERIFIED'
+  | 'REJECTED'
+  | 'EXPIRED';
 
 // Demo bank information
 export interface DemoBank {
@@ -54,6 +69,13 @@ export interface User {
   upiId: string;
   email?: string;
   phone?: string;
+  dateOfBirth?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pinCode?: string;
+  kycStatus: KycStatus;
+  kycDocumentType?: string;
   accountConnectionState: AccountConnectionState;
   connectedBankId?: string;
   connectedBankName?: string;
@@ -156,11 +178,27 @@ export const DEMO_BANKS: DemoBank[] = [
   { id: 'canara', name: 'Canara Bank', shortName: 'Canara', active: true, demoOnly: true },
   { id: 'union', name: 'Union Bank of India', shortName: 'Union', active: true, demoOnly: true },
   { id: 'indian', name: 'Indian Bank', shortName: 'Indian', active: true, demoOnly: true },
+  { id: 'boi', name: 'Bank of India', shortName: 'BoI', active: true, demoOnly: true },
+  { id: 'central', name: 'Central Bank of India', shortName: 'Central', active: true, demoOnly: true },
+  { id: 'iob', name: 'Indian Overseas Bank', shortName: 'IOB', active: true, demoOnly: true },
+  { id: 'uco', name: 'UCO Bank', shortName: 'UCO', active: true, demoOnly: true },
+  { id: 'psb', name: 'Punjab & Sind Bank', shortName: 'PSB', active: true, demoOnly: true },
   { id: 'idbi', name: 'IDBI Bank', shortName: 'IDBI', active: true, demoOnly: true },
   { id: 'indusind', name: 'IndusInd Bank', shortName: 'IndusInd', active: true, demoOnly: true },
   { id: 'federal', name: 'Federal Bank', shortName: 'Federal', active: true, demoOnly: true },
   { id: 'rbl', name: 'RBL Bank', shortName: 'RBL', active: true, demoOnly: true },
   { id: 'yes', name: 'Yes Bank', shortName: 'Yes', active: true, demoOnly: true },
+  { id: 'south_indian', name: 'South Indian Bank', shortName: 'South Indian', active: true, demoOnly: true },
+  { id: 'kvb', name: 'Karur Vysya Bank', shortName: 'KVB', active: true, demoOnly: true },
+  { id: 'cub', name: 'City Union Bank', shortName: 'CUB', active: true, demoOnly: true },
+  { id: 'tmb', name: 'Tamilnad Mercantile Bank', shortName: 'TMB', active: true, demoOnly: true },
+  { id: 'dcb', name: 'DCB Bank', shortName: 'DCB', active: true, demoOnly: true },
+  { id: 'karnataka', name: 'Karnataka Bank', shortName: 'Karnataka', active: true, demoOnly: true },
+  { id: 'jkb', name: 'Jammu & Kashmir Bank', shortName: 'J&K', active: true, demoOnly: true },
+  { id: 'bandhan', name: 'Bandhan Bank', shortName: 'Bandhan', active: true, demoOnly: true },
+  { id: 'au', name: 'AU Small Finance Bank', shortName: 'AU', active: true, demoOnly: true },
+  { id: 'equitas', name: 'Equitas Small Finance Bank', shortName: 'Equitas', active: true, demoOnly: true },
+  { id: 'suryoday', name: 'Suryoday Small Finance Bank', shortName: 'Suryoday', active: true, demoOnly: true },
 ];
 
 // Helper to convert rupees to paise

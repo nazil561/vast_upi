@@ -1,4 +1,38 @@
-# RecoverPay - Firebase Setup Guide
+# PactPay Firebase setup
+
+PactPay is a simulated payment network. It does not connect to real banks, UPI rails, or identity documents.
+
+## Authentication
+
+In Firebase Console, open **Authentication > Sign-in method** and enable:
+
+- Google
+- Email/password
+- Phone
+
+Under **Authentication > Settings > Authorized domains**, add:
+
+- `nazil561.github.io`
+- the local development host used by Vite, usually `localhost`
+
+Phone authentication also requires an SMS region policy and Firebase's web reCAPTCHA flow. Test it on the deployed GitHub Pages origin before presenting it as available to judges.
+
+## Deploy trusted code
+
+From the repository root:
+
+```bash
+npm run build
+npm --prefix functions run build
+firebase deploy --only functions,firestore:rules
+```
+
+The browser only reads user-safe profile, wallet, payment and timeline data. Profile creation, KYC verification, account activation, issuance, payment creation, payment lifecycle changes, policy changes and audit events are callable Cloud Function operations.
+
+## Demo safety
+
+Use synthetic names, phone numbers and identity values only. The account directory and KYC screens are explicitly demo-only. The fixed initial grant is ₹12,000,000 DEMO, issued once after trusted KYC verification and account connection.
+# PactPay - Firebase Setup Guide
 
 ## Prerequisites
 
@@ -10,14 +44,14 @@
 
 1. Go to [Firebase Console](https://console.firebase.google.com)
 2. Click "Add project" or "Create a project"
-3. Enter project name: `recoverpay` (or your preferred name)
+3. Enter project name: `vast-upi` (or your preferred name)
 4. Follow the setup wizard
 5. Enable Google Analytics (optional)
 
 ## Step 2: Register Web App in Firebase
 
 1. In Firebase Console, click the web icon (`</>`) to add a web app
-2. Register app with nickname: `RecoverPay Web`
+2. Register app with nickname: `PactPay Web`
 3. **Copy the Firebase configuration** - you'll need this for `.env`
 
 ## Step 3: Configure Authentication
@@ -120,13 +154,13 @@ Output will be in `dist/` directory.
 4. In GitHub repository settings:
    - Go to Settings > Pages
    - Set source to `gh-pages` branch
-   - Your app will be available at `https://USERNAME.github.io/REPOSITORY/`
+   - Your app is available at `https://nazil561.github.io/vast_upi/`
 
 ## Step 10: Update Firebase Authorized Domains
 
 1. In Firebase Console, go to **Build > Authentication > Settings**
 2. Under "Authorized domains", add your GitHub Pages domain:
-   - `username.github.io`
+   - `nazil561.github.io`
 3. Save
 
 ## Testing the Application

@@ -11,8 +11,8 @@ import { createAuditEvent } from '../audit/auditEvents';
 
 const db = admin.firestore();
 const TREASURY_DOC_ID = 'main';
-const INITIAL_TREASURY_SUPPLY = 1_000_000_000; // ₹1 billion demo supply
-const INITIAL_USER_GRANT = 12_000_000; // ₹12 million per user
+const INITIAL_TREASURY_SUPPLY = 100_000_000_000; // ₹1 billion demo supply, stored in paise
+const INITIAL_USER_GRANT = 1_200_000_000; // ₹12 million per user, stored in paise
 
 /**
  * Initialize or get the demo treasury

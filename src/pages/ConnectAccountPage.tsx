@@ -1,21 +1,70 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { collection, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { db } from '../lib/firebase';
 import { connectDemoAccount } from '../lib/firestore';
-import { formatAmount, INITIAL_DEMO_BALANCE_PAISE, DEMO_BANKS } from '../types';
+import { formatAmount, INITIAL_DEMO_BALANCE_PAISE, DEMO_BANKS, DemoBank } from '../types';
+
+const DEFAULT_BANKS = DEMO_BANKS;
 
 const ConnectAccountPage = () => {
   const navigate = useNavigate();
   const { user, userProfile, refreshUserData } = useAuth();
-  
+
+  const [bankList, setBankList] = useState<DemoBank[]>(DEFAULT_BANKS);
   const [selectedBankId, setSelectedBankId] = useState('');
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [accountType, setAccountType] = useState<'SAVINGS_DEMO' | 'CURRENT_DEMO'>('SAVINGS_DEMO');
+
+  useEffect(() => {
+    const loadRemoteBanks = async () => {
+      try {
+        setRemoteLoading(true);
+        const snapshot = await getDocs(collection(db, 'banks'));
+        const remoteBanks = snapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: String(data.id || doc.id),
+            name: String(data.name || 'Bank'),
+            shortName: String(data.shortName || data.name || 'BANK'),
+            active: data.active !== false,
+            demoOnly: data.demoOnly !== false,
+          } as DemoBank;
+        });
+
+        if (remoteBanks.length > 0) {
+          setBankList(remoteBanks);
+        }
+      } catch {
+        setBankList(DEFAULT_BANKS);
+      } finally {
+        setRemoteLoading(false);
+      }
+    };
+
+    loadRemoteBanks();
+  }, []);
+
+  const filteredBanks = useMemo(() => {
+    const list = bankList.length ? bankList : DEFAULT_BANKS;
+    const term = search.trim().toLowerCase();
+    if (!term) return list;
+    return list.filter((bank) => {
+      const text = `${bank.name} ${bank.shortName}`.toLowerCase();
+      return text.includes(term);
+    });
+  }, [bankList, search]);
+
+  const selectedBank = bankList.find((bank) => bank.id === selectedBankId) || DEFAULT_BANKS.find((bank) => bank.id === selectedBankId) || null;
 
   const handleConnectAccount = async () => {
-    if (!selectedBankId) {
-      setError('Please select a bank');
+    if (!selectedBankId || !user) {
+      setError('Please choose a bank to continue.');
       return;
     }
 
@@ -23,11 +72,11 @@ const ConnectAccountPage = () => {
     setError('');
 
     try {
-      await connectDemoAccount(user!.uid, selectedBankId);
+      await connectDemoAccount(user.uid, selectedBankId, userProfile?.upiId, accountType);
       await refreshUserData();
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Failed to connect account');
+      setError(err?.message || 'Account setup could not be completed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -44,30 +93,32 @@ const ConnectAccountPage = () => {
   if (userProfile?.accountConnectionState === 'CONNECTED') {
     return (
       <div className="page-container">
-        <div className="form-page">
-          <h2>Account Already Connected</h2>
-          
-          <div className="account-connected-card">
-            <div className="success-icon">✓</div>
-            <h3>{userProfile.connectedBankName}</h3>
-            <p className="account-number">{userProfile.demoAccountNumber}</p>
-            <p className="ifsc">IFSC: {userProfile.demoIfsc}</p>
-            <p className="upi-id">{userProfile.upiId}</p>
-            
-            <div className="balance-info">
-              <div className="balance-amount">
-                {formatAmount(INITIAL_DEMO_BALANCE_PAISE)}
-              </div>
-              <p>Demo Balance Available</p>
+        <div className="form-page account-setup-card">
+          <p className="eyebrow">PACTPAY</p>
+          <h2>Account connected ✓</h2>
+          <div className="info-box success-box">
+            <div className="detail-row">
+              <span className="label">Bank:</span>
+              <span className="value">{userProfile.connectedBankName}</span>
+            </div>
+            <div className="detail-row">
+              <span className="label">Account:</span>
+              <span className="value">•••• {String(userProfile.demoAccountNumber || '').slice(-4)}</span>
+            </div>
+            <div className="detail-row">
+              <span className="label">UPI:</span>
+              <span className="value">{userProfile.upiId}</span>
+            </div>
+            <div className="detail-row">
+              <span className="label">Status:</span>
+              <span className="value status-live">CONNECTED</span>
             </div>
           </div>
-
-          <button 
-            onClick={() => navigate('/dashboard')} 
-            className="btn-primary"
-          >
-            Go to Dashboard
-          </button>
+          <div className="balance-card primary compact">
+            <h3>Available</h3>
+            <div className="balance-amount">{formatAmount(INITIAL_DEMO_BALANCE_PAISE)}</div>
+          </div>
+          <button onClick={() => navigate('/dashboard')} className="btn-primary">Go to dashboard</button>
         </div>
       </div>
     );
@@ -75,137 +126,116 @@ const ConnectAccountPage = () => {
 
   return (
     <div className="page-container">
-      <div className="form-page">
-        <h2>Connect Your Demo Account</h2>
-        
-        <div className="info-box">
-          <h4>🏦 Demo Banking Environment</h4>
-          <p>
-            Select a demo bank to create your synthetic account. You'll receive 
-            {formatAmount(INITIAL_DEMO_BALANCE_PAISE)} to start using PactPay.
-          </p>
-          <p>
-            <strong>Note:</strong> This is a simulated environment. No real money or bank accounts are involved.
-          </p>
-        </div>
+      <div className="form-page account-setup-card">
+        <p className="eyebrow">DEMO ENVIRONMENT</p>
+        <h2>Connect your demo account</h2>
+        <p className="muted-text">Choose a bank to create your simulated PactPay account.</p>
 
         {error && <div className="error-message">{error}</div>}
 
         {!showConfirm ? (
           <>
-            <div className="form-group">
-              <label htmlFor="bankSelect">Choose Your Bank</label>
-              <select
-                id="bankSelect"
-                value={selectedBankId}
-                onChange={(e) => {
-                  setSelectedBankId(e.target.value);
-                  setError('');
-                }}
-              >
-                <option value="">-- Select a Bank --</option>
-                {DEMO_BANKS.filter(b => b.active).map((bank) => (
-                  <option key={bank.id} value={bank.id}>
-                    {bank.name} ({bank.shortName})
-                  </option>
-                ))}
-              </select>
+            <div className="search-box">
+              <span className="search-icon">🔎</span>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search your bank"
+                aria-label="Search bank"
+              />
             </div>
 
-            {selectedBankId && (
-              <div className="bank-preview">
-                <h4>Account Preview</h4>
-                <div className="preview-details">
-                  <p><strong>Bank:</strong> {DEMO_BANKS.find(b => b.id === selectedBankId)?.name}</p>
-                  <p><strong>Account Holder:</strong> {userProfile?.displayName}</p>
-                  <p><strong>UPI ID:</strong> {userProfile?.upiId}</p>
-                  <p><strong>Initial Balance:</strong> {formatAmount(INITIAL_DEMO_BALANCE_PAISE)}</p>
+            {remoteLoading && <div className="info-banner">Loading available demo banks…</div>}
+
+            <div className="form-group">
+              <label htmlFor="accountType">Account type</label>
+              <select id="accountType" value={accountType} onChange={(event) => setAccountType(event.target.value as 'SAVINGS_DEMO' | 'CURRENT_DEMO')}>
+                <option value="SAVINGS_DEMO">Savings Account - Demo</option>
+                <option value="CURRENT_DEMO">Current Account - Demo</option>
+              </select>
+              <small>Demo onboarding requirements are configurable and are not bank-specific legal advice.</small>
+            </div>
+
+            <div className="bank-list" role="listbox" aria-label="Bank list">
+              {filteredBanks.length === 0 ? (
+                <div className="empty-state-box">No banks match your search.</div>
+              ) : (
+                filteredBanks.map((bank) => (
+                  <button
+                    type="button"
+                    key={bank.id}
+                    className={`bank-row ${selectedBankId === bank.id ? 'selected' : ''}`}
+                    onClick={() => {
+                      setSelectedBankId(bank.id);
+                      setError('');
+                    }}
+                  >
+                    <div>
+                      <div className="bank-name">{bank.name}</div>
+                      <div className="bank-meta">{bank.shortName}</div>
+                    </div>
+                    <span className="bank-tag">DEMO</span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {selectedBank && (
+              <div className="preview-card">
+                <div className="preview-header">Selected bank</div>
+                <div className="bank-name strong">{selectedBank.name}</div>
+                <div className="detail-row">
+                  <span className="label">Account type:</span>
+                  <span className="value">{accountType === 'SAVINGS_DEMO' ? 'Savings Account - Demo' : 'Current Account - Demo'}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">Account holder:</span>
+                  <span className="value">{userProfile?.displayName || 'PactPay User'}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">Phone:</span>
+                  <span className="value">{user?.phoneNumber || 'Demo number'}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">UPI:</span>
+                  <span className="value">{userProfile?.upiId || 'user@pactpay'}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="label">Initial balance:</span>
+                  <span className="value highlight">{formatAmount(INITIAL_DEMO_BALANCE_PAISE)}</span>
                 </div>
               </div>
             )}
 
-            <button 
-              onClick={handleContinue} 
-              className="btn-primary"
-              disabled={!selectedBankId || loading}
-            >
+            <button onClick={handleContinue} className="btn-primary" disabled={!selectedBankId || loading}>
               Continue
             </button>
           </>
         ) : (
           <div className="confirmation-screen">
-            <h3>Confirm Account Connection</h3>
-            
-            <div className="confirmation-details">
-              <div className="detail-row">
-                <span className="label">Bank:</span>
-                <span className="value">{DEMO_BANKS.find(b => b.id === selectedBankId)?.name}</span>
-              </div>
-              
-              <div className="detail-row">
-                <span className="label">Account Holder:</span>
-                <span className="value">{userProfile?.displayName}</span>
-              </div>
-              
-              <div className="detail-row">
-                <span className="label">UPI ID:</span>
-                <span className="value">{userProfile?.upiId}</span>
-              </div>
-              
-              <div className="detail-row">
-                <span className="label">Initial Demo Balance:</span>
-                <span className="value highlight">{formatAmount(INITIAL_DEMO_BALANCE_PAISE)}</span>
-              </div>
-              
-              <div className="warning-box">
-                <strong>⚠️ Important:</strong>
-                <ul>
-                  <li>This creates a DEMO account with synthetic funds</li>
-                  <li>No real bank connection is established</li>
-                  <li>You cannot withdraw or transfer funds outside PactPay</li>
-                  <li>All transactions are simulated for demonstration</li>
-                </ul>
-              </div>
+            <h3>Confirm account connection</h3>
+            <div className="detail-row"><span className="label">Bank:</span><span className="value">{selectedBank?.name}</span></div>
+            <div className="detail-row"><span className="label">Account holder:</span><span className="value">{userProfile?.displayName}</span></div>
+            <div className="detail-row"><span className="label">Phone:</span><span className="value">{user?.phoneNumber || 'Demo number'}</span></div>
+            <div className="detail-row"><span className="label">UPI:</span><span className="value">{userProfile?.upiId}</span></div>
+            <div className="detail-row"><span className="label">Demo account number:</span><span className="value">••••••••••••</span></div>
+            <div className="detail-row"><span className="label">Synthetic IFSC:</span><span className="value">{selectedBank?.id.toUpperCase().slice(0, 4) || 'PCTP'}0001</span></div>
+            <div className="detail-row"><span className="label">Initial balance:</span><span className="value highlight">{formatAmount(INITIAL_DEMO_BALANCE_PAISE)}</span></div>
+
+            <div className="warning-box">
+              <strong>Demo environment</strong>
+              <p>This creates a simulated bank account and grants the first 12,000,000 DEMO balance only after a successful backend connection.</p>
             </div>
 
-            <div className="modal-actions">
-              <button 
-                onClick={() => setShowConfirm(false)} 
-                className="btn-secondary"
-                disabled={loading}
-              >
-                Back
-              </button>
-              <button 
-                onClick={handleConnectAccount} 
-                className="btn-primary"
-                disabled={loading}
-              >
-                {loading ? 'Connecting...' : 'Connect & Receive Demo Funds'}
+            <div className="modal-actions split-actions">
+              <button onClick={() => setShowConfirm(false)} className="btn-secondary" disabled={loading}>Back</button>
+              <button onClick={handleConnectAccount} className="btn-primary" disabled={loading}>
+                {loading ? 'Connecting…' : 'Connect & Activate Account'}
               </button>
             </div>
           </div>
         )}
-
-        <div className="demo-banks-list">
-          <h4>Available Demo Banks</h4>
-          <div className="banks-grid">
-            {DEMO_BANKS.filter(b => b.active).map((bank) => (
-              <div 
-                key={bank.id}
-                className={`bank-card ${selectedBankId === bank.id ? 'selected' : ''}`}
-                onClick={() => {
-                  setSelectedBankId(bank.id);
-                  setError('');
-                }}
-              >
-                <div className="bank-name">{bank.name}</div>
-                <div className="bank-short">{bank.shortName}</div>
-                {bank.demoOnly && <span className="demo-badge">Demo Only</span>}
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );

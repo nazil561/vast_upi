@@ -111,8 +111,8 @@ Once terminal, a payment cannot change state again.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Offline_UPI_Simulator.git
-cd Offline_UPI_Simulator
+git clone https://github.com/nazil561/vast_upi.git
+cd vast_upi
 npm install
 ```
 

@@ -25,24 +25,20 @@ const HistoryPage = () => {
       setLoading(true);
       const paymentsRef = collection(db, 'payments');
       
-      // Query payments where user is sender or recipient
-      const q = query(
-        paymentsRef,
-        orderBy('createdAt', 'desc')
-      );
-      
-      const snapshot = await getDocs(q);
-      const allPayments = snapshot.docs.map(doc => ({
+      const [sentSnapshot, receivedSnapshot] = await Promise.all([
+        getDocs(query(paymentsRef, where('senderUserId', '==', user.uid), orderBy('createdAt', 'desc'))),
+        getDocs(query(paymentsRef, where('recipientUserId', '==', user.uid), orderBy('createdAt', 'desc'))),
+      ]);
+      const paymentDocs = [...sentSnapshot.docs, ...receivedSnapshot.docs]
+        .filter((doc, index, docs) => docs.findIndex((candidate) => candidate.id === doc.id) === index);
+      const allPayments = paymentDocs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         createdAt: doc.data().createdAt?.toDate() || new Date(),
         expiresAt: doc.data().expiresAt?.toDate() || new Date(),
       })) as Payment[];
 
-      // Filter to only show user's payments
-      const userPayments = allPayments.filter(
-        p => p.senderId === user.uid || p.recipientId === user.uid
-      );
+      const userPayments = allPayments;
 
       // Apply status filter
       let filtered = userPayments;
@@ -83,7 +79,7 @@ const HistoryPage = () => {
   };
 
   const getRole = (payment: Payment): 'sender' | 'recipient' => {
-    return payment.senderId === user?.uid ? 'sender' : 'recipient';
+    return (payment.senderId || (payment as any).senderUserId) === user?.uid ? 'sender' : 'recipient';
   };
 
   if (loading) {

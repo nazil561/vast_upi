@@ -51,9 +51,9 @@ const types_1 = require("../types");
 const auditEvents_1 = require("../audit/auditEvents");
 const db = admin.firestore();
 const TREASURY_DOC_ID = 'main';
-const INITIAL_TREASURY_SUPPLY = 1000000000; // ₹1 billion demo supply
+const INITIAL_TREASURY_SUPPLY = 100000000000; // ₹1 billion demo supply, stored in paise
 exports.INITIAL_TREASURY_SUPPLY = INITIAL_TREASURY_SUPPLY;
-const INITIAL_USER_GRANT = 12000000; // ₹12 million per user
+const INITIAL_USER_GRANT = 1200000000; // ₹12 million per user, stored in paise
 exports.INITIAL_USER_GRANT = INITIAL_USER_GRANT;
 /**
  * Initialize or get the demo treasury

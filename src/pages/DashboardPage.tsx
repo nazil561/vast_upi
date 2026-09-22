@@ -84,12 +84,24 @@ const DashboardPage = () => {
   return (
     <div className="page-container">
       <header className="dashboard-header">
+        <div className="dashboard-brand-row">
+          <div className="brand-mark">PACTPAY</div>
+          <span className="demo-pill">DEMO NETWORK</span>
+        </div>
         <div className="user-info">
           <h1>Welcome, {userProfile?.displayName || 'User'}</h1>
-          <p className="upi-id">{userProfile?.upiId}</p>
+          <p className="upi-id">{userProfile?.upiId} · Synthetic PactPay identity</p>
         </div>
         <button onClick={handleLogout} className="btn-secondary">Logout</button>
       </header>
+
+      <div className="demo-banner">
+        <div>
+          <strong>DEMO ENVIRONMENT</strong>
+          <p>All balances, accounts and transfers here are simulated. No real bank or UPI rail is connected.</p>
+        </div>
+        <span className="status-live">LIVE DEMO</span>
+      </div>
       
       {/* Account Connection Status */}
       {userProfile?.accountConnectionState === 'CONNECTED' && (
@@ -129,6 +141,33 @@ const DashboardPage = () => {
             {wallet ? formatAmount(wallet.protectedIncoming) : '₹0.00'}
           </div>
           <p className="balance-note warning">NOT SPENDABLE</p>
+        </div>
+      </div>
+
+      {wallet && (
+        <div className="balance-summary">
+          <div><span>Displayed total</span><strong>{formatAmount(wallet.availableBalance + wallet.protectedIncoming)}</strong></div>
+          <div><span>Spendable now</span><strong>{formatAmount(wallet.availableBalance)}</strong></div>
+          <div><span>Protected funds</span><strong>{formatAmount(wallet.protectedIncoming + wallet.protectedOutgoing)}</strong></div>
+        </div>
+      )}
+
+      <div className="readiness-grid">
+        <div className="readiness-card">
+          <div className="readiness-icon">✓</div>
+          <div>
+            <p className="eyebrow">DEMO KYC</p>
+            <h3>Verified — Demo</h3>
+            <p>Identity and address checks are synthetic and private to your account.</p>
+          </div>
+        </div>
+        <div className="readiness-card">
+          <div className="readiness-icon">✓</div>
+          <div>
+            <p className="eyebrow">DEMO ACCOUNT</p>
+            <h3>{userProfile?.connectedBankName} connected</h3>
+            <p>{userProfile?.demoAccountNumber} · {userProfile?.demoIfsc}</p>
+          </div>
         </div>
       </div>
       
@@ -207,7 +246,7 @@ const DashboardPage = () => {
         <h4>⚠️ Protected Money Cannot Be Spent</h4>
         <p>
           Funds in "Protected Incoming" are visible but NOT spendable. Only "Available Balance" 
-          can be used for outgoing payments. This is a core security feature of RecoverPay.
+          can be used for outgoing payments. This is a core security feature of PactPay.
         </p>
       </div>
       

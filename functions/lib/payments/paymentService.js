@@ -149,16 +149,39 @@ amount, mode, description, protectionSeconds, idempotencyKey) {
     const expiresAt = mode === 'PROTECTED'
         ? admin.firestore.Timestamp.fromMillis(Date.now() + (protectionSeconds || 600) * 1000)
         : undefined;
-    // Determine if verification is required (based on amount threshold)
-    // In production, this would load user's security policy
-    const verificationRequired = amount >= 1000; // Default threshold
+    const policyDoc = await db.collection('securityPolicies').doc(senderId).get();
+    const policy = policyDoc.data();
+    const verificationRequired = Boolean(policy?.verificationEnabled) && (amount >= Number(policy?.verificationThreshold || 100000) ||
+        Boolean(policy?.verifyNewRecipient));
     return await db.runTransaction(async (transaction) => {
+        const senderWalletRef = db.collection('wallets').doc(senderId);
+        const recipientWalletRef = db.collection('wallets').doc(recipientId);
+        const [senderWalletDoc, recipientWalletDoc] = await Promise.all([
+            transaction.get(senderWalletRef),
+            transaction.get(recipientWalletRef),
+        ]);
+        if (!senderWalletDoc.exists || !recipientWalletDoc.exists) {
+            throw new Error('Wallet not found');
+        }
+        const senderWallet = senderWalletDoc.data();
+        const recipientWallet = recipientWalletDoc.data();
+        (0, walletOperations_1.validateSufficientAvailableBalance)(senderWallet, amount);
         let payment;
         if (mode === 'NORMAL') {
             // NORMAL payment: immediate transfer
-            await (0, walletOperations_1.performNormalTransfer)(senderId, recipientId, amount);
+            transaction.update(senderWalletRef, {
+                availableBalance: senderWallet.availableBalance - amount,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            transaction.update(recipientWalletRef, {
+                availableBalance: recipientWallet.availableBalance + amount,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
             payment = {
                 paymentId,
+                id: paymentId,
+                senderId: senderId,
+                recipientId: recipientId,
                 senderUserId: senderId,
                 senderAccountId: senderAccount.accountNumber,
                 recipientUserId: recipientId,
@@ -203,10 +226,20 @@ amount, mode, description, protectionSeconds, idempotencyKey) {
         }
         else {
             // PROTECTED payment: move to protected balances
-            await (0, walletOperations_1.moveAvailableToProtectedOutgoing)(senderId, amount);
-            await (0, walletOperations_1.creditProtectedIncoming)(recipientId, amount);
+            transaction.update(senderWalletRef, {
+                availableBalance: senderWallet.availableBalance - amount,
+                protectedOutgoing: senderWallet.protectedOutgoing + amount,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            transaction.update(recipientWalletRef, {
+                protectedIncoming: recipientWallet.protectedIncoming + amount,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
             payment = {
                 paymentId,
+                id: paymentId,
+                senderId: senderId,
+                recipientId: recipientId,
                 senderUserId: senderId,
                 senderAccountId: senderAccount.accountNumber,
                 recipientUserId: recipientId,
@@ -326,9 +359,28 @@ async function recoverPayment(paymentId, userId, idempotencyKey) {
             !isValidTransition(payment.status, 'RECOVERED')) {
             throw new Error(`${types_1.ERROR_CODES.INVALID_PAYMENT_STATE}: Cannot recover from ${payment.status}`);
         }
-        // Perform atomic ledger reversal
-        await (0, walletOperations_1.reverseProtectedOutgoingToAvailable)(payment.senderUserId, payment.amount);
-        await (0, walletOperations_1.reverseProtectedIncoming)(payment.recipientUserId, payment.amount);
+        const senderWalletRef = db.collection('wallets').doc(payment.senderUserId);
+        const recipientWalletRef = db.collection('wallets').doc(payment.recipientUserId);
+        const [senderWalletDoc, recipientWalletDoc] = await Promise.all([
+            transaction.get(senderWalletRef),
+            transaction.get(recipientWalletRef),
+        ]);
+        const senderWallet = senderWalletDoc.data();
+        const recipientWallet = recipientWalletDoc.data();
+        if (!senderWalletDoc.exists || !recipientWalletDoc.exists ||
+            senderWallet.protectedOutgoing < payment.amount ||
+            recipientWallet.protectedIncoming < payment.amount) {
+            throw new Error('Protected balance is inconsistent');
+        }
+        transaction.update(senderWalletRef, {
+            availableBalance: senderWallet.availableBalance + payment.amount,
+            protectedOutgoing: senderWallet.protectedOutgoing - payment.amount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.update(recipientWalletRef, {
+            protectedIncoming: recipientWallet.protectedIncoming - payment.amount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         const updatedPayment = {
             ...payment,
             status: 'RECOVERED',
@@ -384,9 +436,28 @@ async function settlePayment(paymentId, userId, idempotencyKey) {
             !isValidTransition(payment.status, 'SETTLED')) {
             throw new Error(`${types_1.ERROR_CODES.INVALID_PAYMENT_STATE}: Cannot settle from ${payment.status}`);
         }
-        // Perform atomic ledger settlement
-        await (0, walletOperations_1.settleProtectedOutgoing)(payment.senderUserId, payment.amount);
-        await (0, walletOperations_1.settleProtectedIncoming)(payment.recipientUserId, payment.amount);
+        const senderWalletRef = db.collection('wallets').doc(payment.senderUserId);
+        const recipientWalletRef = db.collection('wallets').doc(payment.recipientUserId);
+        const [senderWalletDoc, recipientWalletDoc] = await Promise.all([
+            transaction.get(senderWalletRef),
+            transaction.get(recipientWalletRef),
+        ]);
+        const senderWallet = senderWalletDoc.data();
+        const recipientWallet = recipientWalletDoc.data();
+        if (!senderWalletDoc.exists || !recipientWalletDoc.exists ||
+            senderWallet.protectedOutgoing < payment.amount ||
+            recipientWallet.protectedIncoming < payment.amount) {
+            throw new Error('Protected balance is inconsistent');
+        }
+        transaction.update(senderWalletRef, {
+            protectedOutgoing: senderWallet.protectedOutgoing - payment.amount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.update(recipientWalletRef, {
+            protectedIncoming: recipientWallet.protectedIncoming - payment.amount,
+            availableBalance: recipientWallet.availableBalance + payment.amount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         const updatedPayment = {
             ...payment,
             status: 'SETTLED',

@@ -3,10 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   createPayment, 
-  executeProtectedPayment, 
-  updatePaymentStatus, 
   getUserByUpiId, 
-  getSecurityPolicy,
+  getRecipientTrustProfile,
   validateSpendableAmount,
 } from '../lib/firestore';
 import { User, Payment, toPaise, formatAmount, DEFAULT_SECURITY_POLICY } from '../types';
@@ -25,6 +23,10 @@ const SendPaymentPage = () => {
   const [recipient, setRecipient] = useState<User | null>(null);
   const [requiresVerification, setRequiresVerification] = useState(false);
   const [pendingPaymentData, setPendingPaymentData] = useState<any>(null);
+  const [trustProfile, setTrustProfile] = useState<any>(null);
+  const [trustChecked, setTrustChecked] = useState(false);
+  const [trustLoading, setTrustLoading] = useState(false);
+  const [mode, setMode] = useState<'NORMAL' | 'PROTECTED'>('PROTECTED');
 
   // Check if verification is required based on user's policy
   const checkVerificationRequired = (amountPaise: number, isnewRecipient: boolean): boolean => {
@@ -63,7 +65,15 @@ const SendPaymentPage = () => {
         setRecipient(null);
       } else {
         setRecipient(foundUser);
-        setError('');
+        setTrustLoading(true);
+        try {
+          const profile = await getRecipientTrustProfile(foundUser.uid);
+          setTrustProfile(profile);
+          setTrustChecked(false);
+          setError(profile?.available === false ? 'Recipient verification profile unavailable.' : 'Review the recipient profile before continuing.');
+        } finally {
+          setTrustLoading(false);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Error looking up recipient');
@@ -75,6 +85,11 @@ const SendPaymentPage = () => {
 
     if (!recipient) {
       setError('Please look up recipient first');
+      return;
+    }
+
+    if (!trustProfile?.available || !trustChecked) {
+      setError('Review and confirm the Recipient Trust Check before continuing.');
       return;
     }
 
@@ -105,11 +120,12 @@ const SendPaymentPage = () => {
         amountRupees: amountNum,
         description,
         protectionSeconds: parseInt(protectionSeconds),
+        mode,
       });
       setVerificationStep(true);
     } else {
       // Direct payment without verification
-      await executePayment(recipient.uid, amountPaise, amountNum, description, parseInt(protectionSeconds));
+      await executePayment(recipient.uid, amountPaise, amountNum, description, parseInt(protectionSeconds), mode);
     }
   };
 
@@ -118,7 +134,8 @@ const SendPaymentPage = () => {
     amountPaise: number,
     amountRupees: number,
     desc: string,
-    protectionSecs: number
+    protectionSecs: number,
+    paymentMode: 'NORMAL' | 'PROTECTED'
   ) => {
     setLoading(true);
     setError('');
@@ -127,33 +144,19 @@ const SendPaymentPage = () => {
       // Generate idempotency key
       const idempotencyKey = `${user!.uid}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-      // Create payment document
+      // The callable function validates the recipient, debits the ledger, and records events atomically.
       const payment = await createPayment({
         senderId: user!.uid,
         recipientId,
         amount: amountPaise,
         currency: 'INR',
         description: desc || 'Protected payment',
+        mode: paymentMode,
         protectionSeconds: protectionSecs,
         idempotencyKey,
+        recipientTrustChecked: true,
+        verificationConfirmed: true,
       });
-
-      // Execute protected payment (atomic transaction)
-      await executeProtectedPayment(user!.uid, recipientId, amountPaise, payment.id);
-
-      // Update status to PROTECTED
-      await updatePaymentStatus(payment.id, 'PROTECTED', user!.uid);
-
-      // Record event
-      await import('../lib/firestore').then(m => m.createPaymentEvent(payment.id, {
-        type: 'PAYMENT_PROTECTED',
-        actorId: user!.uid,
-        metadata: {
-          amount: amountPaise,
-          protectionSeconds,
-          expiresAt: payment.expiresAt.toISOString(),
-        },
-      }));
 
       // Refresh wallet data
       await refreshUserData();
@@ -174,6 +177,7 @@ const SendPaymentPage = () => {
         pendingPaymentData.amountRupees,
         pendingPaymentData.description,
         pendingPaymentData.protectionSeconds
+        , pendingPaymentData.mode
       );
     }
   };
@@ -296,6 +300,36 @@ const SendPaymentPage = () => {
             </button>
           </div>
         )}
+
+        {trustLoading && <div className="info-box">Loading recipient trust profile...</div>}
+
+        {trustProfile?.available && recipient && (
+          <div className="trust-card">
+            <div className="trust-card-heading">
+              <div>
+                <p className="eyebrow">RECIPIENT TRUST CHECK</p>
+                <h3>Verify recipient</h3>
+              </div>
+              <span className="demo-pill">CONSENTED DEMO DATA</span>
+            </div>
+            <div className="trust-person">
+              <div className="avatar-circle">{recipient.displayName.slice(0, 1).toUpperCase()}</div>
+              <div><strong>{trustProfile.displayName}</strong><span>{trustProfile.upiId}</span></div>
+            </div>
+            <div className="trust-signals">
+              <span>✓ Identity verified — DEMO</span>
+              <span>{trustProfile.phoneVerified ? '✓ Phone verified' : '• Phone unavailable'}</span>
+              <span>{trustProfile.addressVerified ? '✓ Address verified' : '• Address unavailable'}</span>
+              <span>✓ {trustProfile.connectedBankName} — Demo</span>
+              <span>✓ Account {trustProfile.demoAccountNumber}</span>
+              <span>• {trustProfile.kycDocumentType} — DEMO</span>
+            </div>
+            <label className="consent-row trust-consent">
+              <input type="checkbox" checked={trustChecked} onChange={(event) => setTrustChecked(event.target.checked)} />
+              <span>I reviewed this recipient profile and want to continue to payment.</span>
+            </label>
+          </div>
+        )}
         
         <div className="form-group">
           <label htmlFor="amount">Amount (₹)</label>
@@ -324,12 +358,20 @@ const SendPaymentPage = () => {
         </div>
         
         <div className="form-group">
+          <label htmlFor="paymentMode">Payment type</label>
+          <select id="paymentMode" value={mode} onChange={(event) => setMode(event.target.value as 'NORMAL' | 'PROTECTED')} disabled={loading}>
+            <option value="PROTECTED">Protected - visible now, spendable after settlement</option>
+            <option value="NORMAL">Normal - immediate simulated settlement</option>
+          </select>
+        </div>
+
+        <div className="form-group">
           <label htmlFor="protectionSeconds">Protection Period</label>
           <select
             id="protectionSeconds"
             value={protectionSeconds}
             onChange={(e) => setProtectionSeconds(e.target.value)}
-            disabled={loading}
+            disabled={loading || mode === 'NORMAL'}
           >
             <option value="300">5 minutes</option>
             <option value="600">10 minutes</option>
@@ -345,7 +387,7 @@ const SendPaymentPage = () => {
           className="btn-primary"
           disabled={!recipient || loading}
         >
-          {loading ? 'Processing...' : 'Send Protected Payment'}
+          {loading ? 'Processing...' : mode === 'PROTECTED' ? 'Protect Payment' : 'Send Payment'}
         </button>
         
         <div className="info-box">

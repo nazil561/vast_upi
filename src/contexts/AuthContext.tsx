@@ -1,7 +1,21 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User as FirebaseUser, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth, db } from '../lib/firebase';
-import { getUser, createUser as createFirestoreUser, getWallet, initializeDemoWallet, getSecurityPolicy, createSecurityPolicy, getUserByUpiId } from '../lib/firestore';
+import {
+  User as FirebaseUser,
+  onAuthStateChanged,
+  signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  signInWithPopup,
+  fetchSignInMethodsForEmail,
+} from 'firebase/auth';
+import { auth, googleProvider, functions } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import {
+  getUser,
+  getWallet,
+  getSecurityPolicy,
+} from '../lib/firestore';
 import { User, Wallet, SecurityPolicy } from '../types';
 
 interface AuthContextType {
@@ -12,11 +26,38 @@ interface AuthContextType {
   loading: boolean;
   signUp: (email: string, password: string, displayName: string, upiId: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   refreshUserData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const buildSafeUpiId = (displayName: string): string => {
+  const base = (displayName || 'pactpay')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 12);
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `${base || 'user'}${suffix}@pactpay`;
+};
+
+const ensureUserProfile = async (firebaseUser: FirebaseUser) => {
+  const profile = await getUser(firebaseUser.uid);
+  if (profile) {
+    return profile;
+  }
+
+  const displayName = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'PactPay User';
+  const email = firebaseUser.email || undefined;
+  const phone = firebaseUser.phoneNumber || undefined;
+  const upiId = buildSafeUpiId(displayName);
+
+  const ensureProfile = httpsCallable(functions, 'ensureProfile');
+  await ensureProfile({ displayName, upiId, email, phone });
+  return getUser(firebaseUser.uid);
+};
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -50,15 +91,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
-      
+
       if (firebaseUser) {
-        await loadUserData(firebaseUser.uid);
+        try {
+          const profile = await ensureUserProfile(firebaseUser);
+          setUserProfile(profile);
+          await loadUserData(firebaseUser.uid);
+        } catch (error) {
+          console.error('Failed to initialize user profile:', error);
+          setUserProfile(null);
+          setWallet(null);
+          setSecurityPolicy(null);
+        }
       } else {
         setUserProfile(null);
         setWallet(null);
         setSecurityPolicy(null);
       }
-      
+
       setLoading(false);
     });
 
@@ -66,26 +116,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signUp = async (email: string, password: string, displayName: string, upiId: string) => {
-    // Check if UPI ID already exists
-    const existingUser = await getUserByUpiId(upiId);
-    if (existingUser) {
-      throw new Error('UPI ID already registered. Please choose a different one.');
+    const trimmed = upiId.trim();
+
+    const methods = await fetchSignInMethodsForEmail(auth, email);
+    if (methods.length > 0 && !methods.includes('password')) {
+      throw new Error('This email is already linked to a different sign-in method. Please use the existing account instead.');
     }
 
     const credential = await createUserWithEmailAndPassword(auth, email, password);
     const uid = credential.user.uid;
-
-    // Update display name
     await updateProfile(credential.user, { displayName });
-
-    // Create Firestore documents
-    await createFirestoreUser(uid, displayName, upiId, email);
-    await initializeDemoWallet(uid, 10000); // ₹10,000 demo balance
-    await createSecurityPolicy(uid);
+    const ensureProfile = httpsCallable(functions, 'ensureProfile');
+    await ensureProfile({ displayName, upiId: trimmed, email });
+    setUserProfile(await getUser(uid) ?? null);
   };
 
   const signIn = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);
+  };
+
+  const signInWithGoogle = async () => {
+    await signInWithPopup(auth, googleProvider);
   };
 
   const logout = async () => {
@@ -100,6 +151,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     loading,
     signUp,
     signIn,
+    signInWithGoogle,
     logout,
     refreshUserData,
   };

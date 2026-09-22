@@ -48,7 +48,6 @@ exports.validateAccountEligible = validateAccountEligible;
 const admin = __importStar(require("firebase-admin"));
 const types_1 = require("../types");
 const bankDirectory_1 = require("./bankDirectory");
-const walletOperations_1 = require("./walletOperations");
 const treasuryService_1 = require("../treasury/treasuryService");
 const auditEvents_1 = require("../audit/auditEvents");
 const db = admin.firestore();
@@ -87,7 +86,7 @@ function generateUpiId(displayName, userId) {
  * @param customUpiId - Optional custom UPI ID (validated server-side)
  * @returns The created account
  */
-async function connectDemoAccount(userId, userData, bankId, customUpiId) {
+async function connectDemoAccount(userId, userData, bankId, customUpiId, accountType = 'SAVINGS_DEMO') {
     // Validate the bank exists and is active
     const bank = (0, bankDirectory_1.getBankById)(bankId);
     if (!bank || !bank.active) {
@@ -102,6 +101,9 @@ async function connectDemoAccount(userId, userData, bankId, customUpiId) {
             const existingAccount = existingAccountDoc.data();
             if (existingAccount.status === 'CONNECTED') {
                 throw new Error(types_1.ERROR_CODES.DUPLICATE_ACCOUNT + ': Account already connected');
+            }
+            if (existingAccount.status === 'CONNECTING') {
+                return existingAccount;
             }
         }
         // Get user data to verify ownership
@@ -120,6 +122,7 @@ async function connectDemoAccount(userId, userData, bankId, customUpiId) {
             bankId: bank.bankId,
             bankName: bank.name,
             accountNumber,
+            accountType,
             ifsc,
             upiId,
             holderName: userData.displayName,
@@ -134,8 +137,6 @@ async function connectDemoAccount(userId, userData, bankId, customUpiId) {
             upiId,
             updatedAt: now,
         });
-        // Create or get wallet
-        await (0, walletOperations_1.getOrCreateWallet)(userId);
         // Return account in CONNECTING state (funds issued in separate step)
         return { ...newAccount, status: 'CONNECTING' };
     });
@@ -184,17 +185,48 @@ async function completeAccountConnection(userId, accountId) {
  */
 async function issueInitialDemoFunds(userId, accountId) {
     const accountRef = db.collection('demoAccounts').doc(accountId);
-    // Check if already issued (quick check before transaction)
-    const alreadyIssued = await (0, treasuryService_1.checkFundsAlreadyIssued)(accountId);
-    if (alreadyIssued) {
-        throw new Error(types_1.ERROR_CODES.DEMO_FUNDS_ALREADY_ISSUED);
-    }
-    // Get wallet
-    const wallet = await (0, walletOperations_1.getOrCreateWallet)(userId);
-    // Issue funds from treasury
-    const issuedAmount = await (0, treasuryService_1.issueDemoFunds)(userId, wallet.userId, 'INITIAL_GRANT');
-    // Mark as issued
-    await (0, treasuryService_1.markFundsIssued)(userId, accountId, issuedAmount);
+    const treasuryRef = db.collection('treasury').doc('main');
+    const walletRef = db.collection('wallets').doc(userId);
+    const issuedAmount = 1200000000;
+    await db.runTransaction(async (transaction) => {
+        const [accountDoc, treasuryDoc, walletDoc] = await Promise.all([
+            transaction.get(accountRef),
+            transaction.get(treasuryRef),
+            transaction.get(walletRef),
+        ]);
+        if (!accountDoc.exists || !walletDoc.exists) {
+            throw new Error(types_1.ERROR_CODES.USER_NOT_FOUND);
+        }
+        const account = accountDoc.data();
+        if (account.userId !== userId) {
+            throw new Error(types_1.ERROR_CODES.UNAUTHORIZED_OPERATION);
+        }
+        if (account.fundsIssued === true) {
+            return;
+        }
+        const treasury = treasuryDoc.exists
+            ? treasuryDoc.data()
+            : { remainingSupply: 100000000000, totalIssued: 0 };
+        if (treasury.remainingSupply < issuedAmount) {
+            throw new Error(types_1.ERROR_CODES.TREASURY_ERROR + ': Insufficient treasury supply');
+        }
+        transaction.set(treasuryRef, {
+            totalIssued: treasury.totalIssued + issuedAmount,
+            remainingSupply: treasury.remainingSupply - issuedAmount,
+            currency: 'INR_DEMO',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        transaction.update(walletRef, {
+            availableBalance: Number(walletDoc.data()?.availableBalance || 0) + issuedAmount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.update(accountRef, {
+            fundsIssued: true,
+            issuedAmount,
+            issuedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    });
     // Create audit event for account connection
     await (0, auditEvents_1.createAuditEvent)('DEMO_ACCOUNT_CONNECTED', userId, {
         accountId,

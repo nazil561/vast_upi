@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const SignupPage = () => {
@@ -17,30 +17,34 @@ const SignupPage = () => {
     e.preventDefault();
     setError('');
 
+    if (!displayName.trim()) {
+      setError('Please enter your full name.');
+      return;
+    }
+
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('Passwords do not match.');
       return;
     }
 
     if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+      setError('Password must be at least 6 characters.');
       return;
     }
 
-    // Validate UPI ID format (simple validation)
     const upiPattern = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/;
-    if (!upiPattern.test(upiId)) {
-      setError('Invalid UPI ID format. Example: alice@upi');
+    if (!upiPattern.test(upiId.trim())) {
+      setError('Enter a valid UPI ID. Example: alice@pactpay');
       return;
     }
 
     setLoading(true);
 
     try {
-      await signUp(email, password, displayName, upiId);
-      navigate('/dashboard');
+      await signUp(email, password, displayName, upiId.trim());
+      navigate('/connect-account');
     } catch (err: any) {
-      setError(err.message || 'Failed to create account');
+      setError(err?.message || 'Account could not be created. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -49,92 +53,54 @@ const SignupPage = () => {
   return (
     <div className="auth-page">
       <div className="auth-container">
-        <h1>RecoverPay</h1>
-        <p className="subtitle">Conditional Settlement Payment Simulator</p>
-        
+        <div className="brand-header">
+          <div className="brand-mark">PACTPAY</div>
+          <p className="subtitle">Protected payment infrastructure</p>
+        </div>
+
         <form onSubmit={handleSubmit} className="auth-form">
-          <h2>Create Account</h2>
-          
+          <h2>Create account</h2>
+
           {error && <div className="error-message">{error}</div>}
-          
-          <div className="form-group">
-            <label htmlFor="displayName">Full Name</label>
-            <input
-              type="text"
-              id="displayName"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              required
-              placeholder="Alice Kumar"
-            />
+
+          <div className="field-group">
+            <label htmlFor="displayName">Full name</label>
+            <input type="text" id="displayName" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required placeholder="Alice Kumar" />
           </div>
-          
-          <div className="form-group">
+
+          <div className="field-group">
             <label htmlFor="email">Email</label>
-            <input
-              type="email"
-              id="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="alice@example.com"
-            />
+            <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="alice@example.com" />
           </div>
-          
-          <div className="form-group">
-            <label htmlFor="upiId">UPI ID (Simulated)</label>
-            <input
-              type="text"
-              id="upiId"
-              value={upiId}
-              onChange={(e) => setUpiId(e.target.value.toLowerCase())}
-              required
-              placeholder="alice@upi"
-            />
-            <small>Choose a unique identifier for your demo account</small>
+
+          <div className="field-group">
+            <label htmlFor="upiId">UPI ID</label>
+            <input type="text" id="upiId" value={upiId} onChange={(e) => setUpiId(e.target.value.toLowerCase())} required placeholder="alice@pactpay" />
           </div>
-          
-          <div className="form-group">
+
+          <div className="field-group">
             <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="••••••••"
-            />
+            <input type="password" id="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" />
           </div>
-          
-          <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password</label>
-            <input
-              type="password"
-              id="confirmPassword"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              placeholder="••••••••"
-            />
+
+          <div className="field-group">
+            <label htmlFor="confirmPassword">Confirm password</label>
+            <input type="password" id="confirmPassword" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required placeholder="••••••••" />
           </div>
-          
-          <button type="submit" disabled={loading} className="btn-primary">
+
+          <button type="submit" className="btn-primary" disabled={loading}>
             {loading ? 'Creating account...' : 'Create Account'}
           </button>
-          
-          <p className="auth-link">
-            Already have an account? <a href="/login">Sign In</a>
-          </p>
+
+          <div className="auth-meta-row">
+            <span>Already have an account?</span>
+            <Link to="/login">Sign In</Link>
+          </div>
         </form>
-        
-        <div className="demo-info">
-          <h3>Demo Features</h3>
-          <ul>
-            <li>₹10,000 demo balance on signup</li>
-            <li>Protected payments with recovery option</li>
-            <li>User-controlled verification thresholds</li>
-            <li>Complete transaction history</li>
-          </ul>
+
+        <div className="demo-info compact-demo">
+          <h3>Demo environment</h3>
+          <p>New users begin at ₹0 DEMO and connect a demo bank before receiving the initial ₹12,000,000 balance.</p>
         </div>
       </div>
     </div>

@@ -6,8 +6,8 @@
  */
 
 import * as admin from 'firebase-admin';
-import * as functions from 'firebase-functions';
-import { connectDemoAccount, completeAccountConnection, issueInitialDemoFunds } from './accounts/connectDemoAccount';
+import * as functions from 'firebase-functions/v1';
+import { connectDemoAccount as connectDemoAccountService, completeAccountConnection, issueInitialDemoFunds } from './accounts/connectDemoAccount';
 import { createPayment, acknowledgePayment, recoverPayment, settlePayment } from './payments/paymentService';
 
 // Initialize Firebase Admin
@@ -19,6 +19,7 @@ interface CallableData {
   data?: any;
   bankId?: string;
   customUpiId?: string;
+  accountType?: 'SAVINGS_DEMO' | 'CURRENT_DEMO';
   recipientIdentifier?: string;
   amount?: number;
   mode?: string;
@@ -26,12 +27,294 @@ interface CallableData {
   protectionSeconds?: number;
   idempotencyKey?: string;
   paymentId?: string;
+  displayName?: string;
+  upiId?: string;
+  dateOfBirth?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pinCode?: string;
+  documentType?: string;
+  consent?: boolean;
+  verificationEnabled?: boolean;
+  verificationThreshold?: number;
+  verifyNewRecipient?: boolean;
+  verifyRecovery?: boolean;
+  verifySettlement?: boolean;
+  protectionPeriodSeconds?: number;
+  searchTerm?: string;
+  recipientTrustChecked?: boolean;
+  verificationConfirmed?: boolean;
 }
+
+const DEFAULT_SECURITY_POLICY = {
+  verificationEnabled: true,
+  verificationThreshold: 100000,
+  verifyNewRecipient: true,
+  verifyRecovery: true,
+  verifySettlement: true,
+  protectionPeriodSeconds: 600,
+};
+
+export const ensureProfile = functions.https.onCall(async (data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const uid = context.auth.uid;
+  const userRef = db.collection('users').doc(uid);
+  const walletRef = db.collection('wallets').doc(uid);
+  const policyRef = db.collection('securityPolicies').doc(uid);
+  const authUser = await admin.auth().getUser(uid);
+  const displayName = String(data.displayName || authUser.displayName || authUser.email?.split('@')[0] || 'PactPay User').trim();
+  const requestedUpi = String(data.upiId || '').trim().toLowerCase();
+
+  if (requestedUpi) {
+    const existingUpi = await db.collection('users').where('upiId', '==', requestedUpi).limit(1).get();
+    if (!existingUpi.empty && existingUpi.docs[0].id !== uid) {
+      throw new functions.https.HttpsError('already-exists', 'This PactPay ID is already in use');
+    }
+  }
+
+  await db.runTransaction(async (transaction) => {
+    const [userDoc, walletDoc, policyDoc] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(walletRef),
+      transaction.get(policyRef),
+    ]);
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    if (!userDoc.exists) {
+      const suffix = Math.random().toString(36).slice(2, 6);
+      const upiId = requestedUpi || `${displayName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'user'}${suffix}@pactpay`;
+      transaction.set(userRef, {
+        uid,
+        displayName,
+        email: authUser.email || null,
+        phone: authUser.phoneNumber || null,
+        upiId,
+        accountConnectionState: 'NOT_CONNECTED',
+        kycStatus: 'NOT_STARTED',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    if (!walletDoc.exists) {
+      transaction.set(walletRef, {
+        uid,
+        availableBalance: 0,
+        protectedOutgoing: 0,
+        protectedIncoming: 0,
+        currency: 'INR_DEMO',
+        updatedAt: now,
+      });
+    }
+
+    if (!policyDoc.exists) {
+      transaction.set(policyRef, { uid, ...DEFAULT_SECURITY_POLICY, updatedAt: now });
+    }
+  });
+
+  return { success: true, data: (await userRef.get()).data() };
+});
+
+export const submitDemoKyc = functions.https.onCall(async (data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const required = [data.displayName, data.dateOfBirth, data.address, data.city, data.state, data.pinCode, data.documentType];
+  if (required.some((value) => !String(value || '').trim()) || data.consent !== true) {
+    throw new functions.https.HttpsError('invalid-argument', 'Complete the demo KYC form and consent');
+  }
+
+  const uid = context.auth.uid;
+  const userRef = db.collection('users').doc(uid);
+  const kycRef = db.collection('kycProfiles').doc(uid);
+  if (!(await userRef.get()).exists) {
+    throw new functions.https.HttpsError('failed-precondition', 'Profile must be initialized first');
+  }
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const kycProfile = {
+    uid,
+    status: 'VERIFICATION_PENDING',
+    demoOnly: true,
+    documentType: String(data.documentType),
+    syntheticDocumentId: `DEMO-${String(data.documentType)}-XXXX`,
+    displayName: String(data.displayName).trim(),
+    dateOfBirth: String(data.dateOfBirth),
+    address: String(data.address).trim(),
+    city: String(data.city).trim(),
+    state: String(data.state).trim(),
+    pinCode: String(data.pinCode).trim(),
+    consentedAt: now,
+    updatedAt: now,
+  };
+
+  await db.runTransaction(async (transaction) => {
+    transaction.set(kycRef, kycProfile, { merge: true });
+    transaction.update(userRef, {
+      displayName: kycProfile.displayName,
+      dateOfBirth: kycProfile.dateOfBirth,
+      address: kycProfile.address,
+      city: kycProfile.city,
+      state: kycProfile.state,
+      pinCode: kycProfile.pinCode,
+      kycStatus: 'VERIFICATION_PENDING',
+      kycDocumentType: kycProfile.documentType,
+      accountConnectionState: 'KYC_PENDING',
+      updatedAt: now,
+    });
+  });
+
+  return { success: true, data: { status: 'VERIFICATION_PENDING', syntheticDocumentId: kycProfile.syntheticDocumentId } };
+});
+
+export const verifyDemoKyc = functions.https.onCall(async (_data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const uid = context.auth.uid;
+  const userRef = db.collection('users').doc(uid);
+  const kycRef = db.collection('kycProfiles').doc(uid);
+  const [userDoc, kycDoc] = await Promise.all([userRef.get(), kycRef.get()]);
+  if (!userDoc.exists || !kycDoc.exists || kycDoc.data()?.status !== 'VERIFICATION_PENDING') {
+    throw new functions.https.HttpsError('failed-precondition', 'Submit demo KYC before verification');
+  }
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  await db.runTransaction(async (transaction) => {
+    transaction.update(kycRef, {
+      status: 'VERIFIED',
+      identityStatus: 'VERIFIED',
+      addressStatus: 'VERIFIED',
+      verificationStatus: 'VERIFIED',
+      verifiedAt: now,
+      updatedAt: now,
+    });
+    transaction.update(userRef, {
+      kycStatus: 'VERIFIED',
+      accountConnectionState: 'KYC_VERIFIED',
+      updatedAt: now,
+    });
+  });
+
+  return { success: true, data: { status: 'VERIFIED' } };
+});
+
+export const updateSecurityPolicyFn = functions.https.onCall(async (data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const policy = {
+    verificationEnabled: Boolean(data.verificationEnabled),
+    verificationThreshold: Number(data.verificationThreshold),
+    verifyNewRecipient: Boolean(data.verifyNewRecipient),
+    verifyRecovery: Boolean(data.verifyRecovery),
+    verifySettlement: Boolean(data.verifySettlement),
+    protectionPeriodSeconds: Number(data.protectionPeriodSeconds),
+  };
+
+  if (!Number.isInteger(policy.verificationThreshold) || policy.verificationThreshold < 0 ||
+      !Number.isInteger(policy.protectionPeriodSeconds) || policy.protectionPeriodSeconds < 30) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid security policy');
+  }
+
+  await db.collection('securityPolicies').doc(context.auth.uid).set({
+    uid: context.auth.uid,
+    ...policy,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { success: true };
+});
+
+export const searchConnectedUsers = functions.https.onCall(async (data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const term = String(data.searchTerm || '').trim().toLowerCase();
+  if (!term) return { success: true, data: [] };
+
+  const snapshot = await db.collection('users')
+    .where('accountConnectionState', '==', 'CONNECTED')
+    .limit(100)
+    .get();
+
+  const matches = snapshot.docs
+    .map((doc) => ({ uid: doc.id, ...doc.data() }))
+    .filter((user: any) => [user.displayName, user.upiId, user.phone].some((value) => String(value || '').toLowerCase().includes(term)))
+    .filter((user: any) => user.uid !== context.auth.uid)
+    .map((user: any) => ({
+      uid: user.uid,
+      displayName: user.displayName,
+      upiId: user.upiId,
+      phone: user.phone || undefined,
+      accountConnectionState: user.accountConnectionState,
+      connectedBankName: user.connectedBankName,
+      demoAccountNumber: user.demoAccountNumber ? `••••${String(user.demoAccountNumber).slice(-4)}` : undefined,
+      createdAt: user.createdAt,
+    }));
+
+  return { success: true, data: matches };
+});
+
+export const getRecipientTrustProfile = functions.https.onCall(async (data: CallableData, context: any) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const recipientId = String((data as any).recipientId || '').trim();
+  if (!recipientId || recipientId === context.auth.uid) {
+    throw new functions.https.HttpsError('invalid-argument', 'Recipient is required');
+  }
+
+  const [userDoc, accountDoc, kycDoc] = await Promise.all([
+    db.collection('users').doc(recipientId).get(),
+    db.collection('demoAccounts').doc(recipientId).get(),
+    db.collection('kycProfiles').doc(recipientId).get(),
+  ]);
+  const user = userDoc.data() as any;
+  const account = accountDoc.data() as any;
+  const kyc = kycDoc.data() as any;
+  if (!userDoc.exists || !accountDoc.exists || user.accountConnectionState !== 'CONNECTED') {
+    throw new functions.https.HttpsError('not-found', 'Recipient account is not connected');
+  }
+
+  if (user.trustProfileSharingEnabled === false) {
+    return { success: true, data: { available: false } };
+  }
+
+  return {
+    success: true,
+    data: {
+      available: true,
+      uid: recipientId,
+      displayName: user.displayName,
+      upiId: user.upiId,
+      phoneVerified: Boolean(user.phone),
+      identityVerified: kyc?.status === 'VERIFIED',
+      addressVerified: kyc?.addressStatus === 'VERIFIED',
+      kycDocumentType: kyc?.documentType || 'DEMO',
+      connectedBankName: account.bankName,
+      demoAccountNumber: `••••${String(account.accountNumber).slice(-4)}`,
+      accountType: account.accountType || 'SAVINGS_DEMO',
+      accountStatus: account.status,
+      profileCreatedAt: user.createdAt,
+      sharingEnabled: true,
+    },
+  };
+});
 
 /**
  * Connect a demo bank account
  */
-export const connectAccount = functions.https.onCall(async (data: CallableData, context) => {
+export const connectAccount = functions.https.onCall(async (data: CallableData, context: any) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }
@@ -40,19 +323,26 @@ export const connectAccount = functions.https.onCall(async (data: CallableData, 
   const requestData = data.data || data;
   const bankId = requestData.bankId;
   const customUpiId = requestData.customUpiId;
+  const accountType = requestData.accountType === 'CURRENT_DEMO' ? 'CURRENT_DEMO' : 'SAVINGS_DEMO';
   
   if (!bankId) {
     throw new functions.https.HttpsError('invalid-argument', 'bankId is required');
   }
   
   try {
+    const profileDoc = await db.collection('users').doc(userId).get();
+    const kycProfile = await db.collection('kycProfiles').doc(userId).get();
+    if (!profileDoc.exists || profileDoc.data()?.kycStatus !== 'VERIFIED' || kycProfile.data()?.status !== 'VERIFIED') {
+      throw new functions.https.HttpsError('failed-precondition', 'Complete demo KYC before connecting an account');
+    }
+
     const userRecord = await admin.auth().getUser(userId);
     const userData = {
       displayName: userRecord.displayName || 'User',
       phoneNumber: userRecord.phoneNumber || '',
     };
     
-    const account = await connectDemoAccount(userId, userData, bankId, customUpiId);
+    const account = await connectDemoAccountService(userId, userData, bankId, customUpiId, accountType);
     const connectedAccount = await completeAccountConnection(userId, account.userId);
     const issuedAmount = await issueInitialDemoFunds(userId, account.userId);
     
@@ -66,6 +356,9 @@ export const connectAccount = functions.https.onCall(async (data: CallableData, 
   } catch (error: any) {
     console.error('connectAccount error:', error);
     
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
     if (error.code) {
       throw new functions.https.HttpsError(error.code, error.message);
     }
@@ -74,10 +367,12 @@ export const connectAccount = functions.https.onCall(async (data: CallableData, 
   }
 });
 
+export const connectDemoAccount = connectAccount;
+
 /**
  * Create a payment (NORMAL or PROTECTED)
  */
-export const createPaymentFn = functions.https.onCall(async (data: CallableData, context) => {
+export const createPaymentFn = functions.https.onCall(async (data: CallableData, context: any) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }
@@ -87,6 +382,19 @@ export const createPaymentFn = functions.https.onCall(async (data: CallableData,
   
   if (!requestData.recipientIdentifier || !requestData.amount || !requestData.mode) {
     throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+  }
+
+  if (requestData.recipientTrustChecked !== true) {
+    throw new functions.https.HttpsError('failed-precondition', 'Complete Recipient Trust Check before paying');
+  }
+
+  const policyDoc = await db.collection('securityPolicies').doc(senderId).get();
+  const policy = policyDoc.data() || DEFAULT_SECURITY_POLICY;
+  const requiresVerification = Boolean(policy.verificationEnabled) && (
+    Number(requestData.amount) >= Number(policy.verificationThreshold) || Boolean(policy.verifyNewRecipient)
+  );
+  if (requiresVerification && requestData.verificationConfirmed !== true) {
+    throw new functions.https.HttpsError('failed-precondition', 'Payment verification is required');
   }
   
   try {
@@ -118,7 +426,7 @@ export const createPaymentFn = functions.https.onCall(async (data: CallableData,
 /**
  * Acknowledge a protected payment
  */
-export const acknowledgePaymentFn = functions.https.onCall(async (data: CallableData, context) => {
+export const acknowledgePaymentFn = functions.https.onCall(async (data: CallableData, context: any) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }
@@ -151,7 +459,7 @@ export const acknowledgePaymentFn = functions.https.onCall(async (data: Callable
 /**
  * Recover a protected payment
  */
-export const recoverPaymentFn = functions.https.onCall(async (data: CallableData, context) => {
+export const recoverPaymentFn = functions.https.onCall(async (data: CallableData, context: any) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }
@@ -184,7 +492,7 @@ export const recoverPaymentFn = functions.https.onCall(async (data: CallableData
 /**
  * Settle a protected payment
  */
-export const settlePaymentFn = functions.https.onCall(async (data: CallableData, context) => {
+export const settlePaymentFn = functions.https.onCall(async (data: CallableData, context: any) => {
   if (!context.auth?.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }

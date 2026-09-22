@@ -10,17 +10,29 @@ export interface UserData {
   displayName: string;
   phoneNumber: string;
   upiId?: string;
+  kycStatus?: KycStatus;
   createdAt: any; // Firestore timestamp
 }
 
 // Account Types
 export type AccountStatus = 'NOT_CONNECTED' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED';
 
+export type KycStatus =
+  | 'NOT_STARTED'
+  | 'IN_PROGRESS'
+  | 'DOCUMENT_SELECTED'
+  | 'DOCUMENT_SUBMITTED'
+  | 'VERIFICATION_PENDING'
+  | 'VERIFIED'
+  | 'REJECTED'
+  | 'EXPIRED';
+
 export interface DemoAccountData {
   userId: string;
   bankId: string;
   bankName: string;
   accountNumber: string;
+  accountType?: 'SAVINGS_DEMO' | 'CURRENT_DEMO';
   ifsc: string;
   upiId: string;
   holderName: string;
@@ -56,6 +68,9 @@ export type PaymentStatus =
 
 export interface PaymentData {
   paymentId: string;
+  id?: string;
+  senderId?: string;
+  recipientId?: string;
   senderUserId: string;
   senderAccountId: string;
   recipientUserId: string;

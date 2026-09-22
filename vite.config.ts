@@ -1,23 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Configure base path for GitHub Pages deployment
-// Replace 'Offline_UPI_Simulator' with your actual repository name if different
-const BASE_PATH = process.env.GITHUB_PAGES ? '/Offline_UPI_Simulator/' : '/'
-
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  base: BASE_PATH,
+  base: command === 'serve' ? '/' : '/vast_upi/',
   build: {
     outDir: 'dist',
     sourcemap: true,
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore']
-        }
+        manualChunks(id) {
+          if (id.includes('node_modules/firebase')) {
+            if (id.includes('firebase/app')) return 'firebase-app';
+            if (id.includes('firebase/auth')) return 'firebase-auth';
+            if (id.includes('firebase/firestore')) return 'firebase-firestore';
+            if (id.includes('firebase/functions')) return 'firebase-functions';
+            return 'firebase-core';
+          }
+
+          if (id.includes('node_modules/react')) return 'react-vendor';
+          if (id.includes('node_modules/react-router-dom')) return 'router-vendor';
+        },
       }
     }
   }
-})
+}))

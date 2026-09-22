@@ -6,7 +6,6 @@ import {
   getPaymentEvents, 
   executeRecovery, 
   executeSettlement,
-  updatePaymentStatus,
   getUser,
 } from '../lib/firestore';
 import { Payment, PaymentEvent, PaymentStatus, formatAmount, isTerminalState } from '../types';
@@ -121,15 +120,6 @@ const PaymentDetailPage = () => {
           payment.id
         );
 
-        // Update payment status
-        await updatePaymentStatus(payment.id, 'RECOVERED', user!.uid);
-
-        // Record event
-        await import('../lib/firestore').then(m => m.createPaymentEvent(payment.id, {
-          type: 'PAYMENT_RECOVERED',
-          actorId: user!.uid,
-          metadata: { amount: payment.amount },
-        }));
       } else if (pendingAction === 'settle') {
         // Execute settlement transaction
         await executeSettlement(
@@ -139,15 +129,6 @@ const PaymentDetailPage = () => {
           payment.id
         );
 
-        // Update payment status
-        await updatePaymentStatus(payment.id, 'SETTLED', user!.uid);
-
-        // Record event
-        await import('../lib/firestore').then(m => m.createPaymentEvent(payment.id, {
-          type: 'PAYMENT_SETTLED',
-          actorId: user!.uid,
-          metadata: { amount: payment.amount },
-        }));
       }
 
       // Refresh data
